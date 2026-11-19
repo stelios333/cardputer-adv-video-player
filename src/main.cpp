@@ -1,5 +1,5 @@
 /*
-ESP32-S3 video player designed for boards with no PSRAM (like the Cardputer ADV)
+ESP32-S3 H264 video player designed for boards with no PSRAM (like the Cardputer ADV)
 Encode videos with:
 ffmpeg -i input.mp4 -c:v libx264 -profile:v baseline -tune fastdecode -preset veryslow\
  -vf "format=yuv420p, scale=240:136, fps=30" -x264opts slices=1:ref=1 -an output.264
@@ -118,6 +118,15 @@ void audioTask(void *parameter)
     }
 }
 
+String secondsToMinSec(unsigned int totalSeconds) {
+
+  unsigned int minutes = totalSeconds / 60;
+  unsigned int seconds = totalSeconds % 60;
+
+  char buf[12];
+  sprintf(buf, "%u:%02u", minutes, seconds);
+  return String(buf);
+}
 
 std::optional<String> audioTrackExists(const String& name)
 {
@@ -373,6 +382,8 @@ static bool playFile(const char *path) {
       keyboard.waitKeyReleased(';');
       keyboard.waitKeyReleased('.');
   };
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITESMOKE);
   while (nextNal(nal, nalSize)) {
     int off = (nal[2] == 1) ? 3 : 4;
     uint8_t nalType = nal[off] & 0x1F;
@@ -404,6 +415,9 @@ static bool playFile(const char *path) {
         nextDeadline = now;  // fell behind; resync instead of fast-forwarding
       }
 
+    } else {
+      String timestamp = secondsToMinSec(static_cast<unsigned int>(frames*static_cast<float>(FRAME_US)/1000000.0f));
+      tft.drawString(timestamp, 9, 9);
     }
     if (!fast_forward||!(frames%10)) {
       showFrame();
