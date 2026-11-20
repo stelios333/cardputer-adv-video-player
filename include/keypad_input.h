@@ -13,5 +13,6 @@ constexpr char VP_KEY_ESC = '`';
 constexpr char VP_KEY_PAUSE = 'p';
 constexpr char VP_KEY_FASTFORWARD = 'f';
 
+using VideoPlayerKeypad = CardputerAdvKeypad;
 extern VideoPlayerKeypad keyboard;
 #endif

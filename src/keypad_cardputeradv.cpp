@@ -1,25 +1,25 @@
 #include "keypad_cardputeradv.h"
 
-VideoPlayerKeypad::VideoPlayerKeypad()
+CardputerAdvKeypad::CardputerAdvKeypad()
 {
 }
 
-VideoPlayerKeypad::~VideoPlayerKeypad()
+CardputerAdvKeypad::~CardputerAdvKeypad()
 {
 }
 
-void VideoPlayerKeypad::updateKeyStatus()
+void CardputerAdvKeypad::updateKeyStatus()
 {
     while (TCA8418_event)
     {
-        KeypadEvent event = VideoPlayerKeypad::HandleKeypadInput();
+        KeypadEvent event = CardputerAdvKeypad::HandleKeypadInput();
         char key = CARDPUTER_KEYMAP[event.col][event.row].value_first;
         key_state[key].state = event.pressed;
         key_state[key].state_changed = 1;
     }
 }
 
-KeypadEvent VideoPlayerKeypad::HandleKeypadInput()
+KeypadEvent CardputerAdvKeypad::HandleKeypadInput()
 {
     int intStat = keypad.readRegister(TCA8418_REG_INT_STAT);
 
@@ -57,7 +57,7 @@ KeypadEvent VideoPlayerKeypad::HandleKeypadInput()
     return {pressed, row, col};
 }
 
-bool VideoPlayerKeypad::begin(TwoWire &wire)
+bool CardputerAdvKeypad::begin(TwoWire &wire)
 {
     if (!keypad.begin(TCA8418_DEFAULT_ADDR, &wire))
     {
@@ -72,29 +72,29 @@ bool VideoPlayerKeypad::begin(TwoWire &wire)
     return 0;
 }
 
-bool VideoPlayerKeypad::getKey(char key)
+bool CardputerAdvKeypad::getKey(char key)
 {
     return key_state[key].state;
 }
 
-bool VideoPlayerKeypad::keyChanged(char key) 
+bool CardputerAdvKeypad::keyChanged(char key) 
 {
     bool old_state = key_state[key].state_changed;
     key_state[key].state_changed = 0;
     return old_state;
 }
 
-bool VideoPlayerKeypad::keyPressed(char key)
+bool CardputerAdvKeypad::keyPressed(char key)
 {
-    return key_state[key].state && keyChanged(key);
+    return keyChanged(key) && key_state[key].state;
 }
 
-bool VideoPlayerKeypad::keyReleased(char key)
+bool CardputerAdvKeypad::keyReleased(char key)
 {
-    return !key_state[key].state && keyChanged(key);
+    return keyChanged(key) && !key_state[key].state;
 }
 
-void VideoPlayerKeypad::resetKeyStateChangedAll()
+void CardputerAdvKeypad::resetKeyStateChangedAll()
 {
     for (auto &pair : key_state)
     {
@@ -102,7 +102,7 @@ void VideoPlayerKeypad::resetKeyStateChangedAll()
     }
 }
 
-bool VideoPlayerKeypad::anyKey()
+bool CardputerAdvKeypad::anyKey()
 {
     for (const auto &pair : key_state)
     {
@@ -112,7 +112,7 @@ bool VideoPlayerKeypad::anyKey()
     return false;
 }
 
-void VideoPlayerKeypad::waitKeyReleased(char key)
+void CardputerAdvKeypad::waitKeyReleased(char key)
 {
     while (getKey(key))
     {
@@ -121,7 +121,7 @@ void VideoPlayerKeypad::waitKeyReleased(char key)
     }
 }
 
-void VideoPlayerKeypad::waitAllKeysReleased()
+void CardputerAdvKeypad::waitAllKeysReleased()
 {
     while (anyKey())
     {
@@ -130,8 +130,8 @@ void VideoPlayerKeypad::waitAllKeysReleased()
     }
 }
 
-void IRAM_ATTR VideoPlayerKeypad::gpio_isr_handler(void *arg)
+void IRAM_ATTR CardputerAdvKeypad::gpio_isr_handler(void *arg)
 {
-    VideoPlayerKeypad *keypad = static_cast<VideoPlayerKeypad *>(arg);
+    CardputerAdvKeypad *keypad = static_cast<CardputerAdvKeypad *>(arg);
     keypad->TCA8418_event = true;
 }

@@ -110,7 +110,7 @@ const KeyValue_t CARDPUTER_KEYMAP[KEYPAD_COLS][KEYPAD_ROWS] = {
 
 
 
-class VideoPlayerKeypad {
+class CardputerAdvKeypad {
     private:
         Adafruit_TCA8418 keypad;
         typedef struct
@@ -179,8 +179,8 @@ class VideoPlayerKeypad {
         static void IRAM_ATTR gpio_isr_handler(void* arg);
         volatile bool TCA8418_event;
     public:
-        VideoPlayerKeypad();
-        ~VideoPlayerKeypad();
+        CardputerAdvKeypad();
+        ~CardputerAdvKeypad();
         void updateKeyStatus();
         bool begin(TwoWire& wire);
         bool getKey(char key);

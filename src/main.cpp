@@ -72,13 +72,14 @@ static File vidFile;
 static File audFile;
 
 AudioDac audio_dac;
-constexpr size_t BUF_SAMPLES = 735; // 735 samples per frame
+constexpr uint32_t AUDIO_SAMPLE_RATE = 22050;
+constexpr size_t BUF_SAMPLES = (AUDIO_SAMPLE_RATE/1000000.0f)*FRAME_US + 0.5f; // 735 samples per frame
 volatile uint8_t raw_audio_buf[BUF_SAMPLES];
 volatile uint8_t audio_vol = 0x0;
-constexpr uint32_t AUDIO_SAMPLE_RATE = 22050;
 volatile bool audioPlaying = false;
-volatile bool audioPause = false;
+volatile bool audioTaskWait = false;
 volatile bool audioStopRequested = false;
+
 TaskHandle_t audioTaskHandle = nullptr;
 static portMUX_TYPE _spinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -109,8 +110,8 @@ void audioTask(void *parameter)
             taskEXIT_CRITICAL(&_spinlock);
 
             audio_dac.writeSamples((uint8_t*) audio_buf, BUF_SAMPLES * sizeof(int16_t));
-            audioPause = true;
-            while (audioPause&&!audioStopRequested)
+            audioTaskWait = true;
+            while (audioTaskWait&&!audioStopRequested)
             {
               vTaskDelay(1);
             }
@@ -372,7 +373,7 @@ static bool playFile(const char *path) {
   uint32_t t0 = micros();
   bool ok = true;
   bool paused = false;
-  bool fast_forward = true;
+  bool fast_forward = false;
   uint8_t *nal;
   size_t nalSize;
   auto lAdjustVol = [&](uint8_t new_vol) {
@@ -428,25 +429,15 @@ static bool playFile(const char *path) {
       showFrame();
     }
     frames++;
-    if (audioPlaying) {
-      if (fast_forward) {
-        audFile.seek(audFile.position() + BUF_SAMPLES); // BUF_SAMPLES*2 for stereo
-        memset((uint8_t *)raw_audio_buf, 0, BUF_SAMPLES);
-        if (!audFile.available()) {
-          audioStopRequested = true;
-        }
-      } else {
-        size_t bytesRead = audFile.read(
-                  const_cast<uint8_t*>(raw_audio_buf),
-                  BUF_SAMPLES
-              );
-        if (!bytesRead) {
-          audioStopRequested = true;
-        }
+    if (audioPlaying && !fast_forward) {
+      size_t bytesRead = audFile.read(
+                const_cast<uint8_t*>(raw_audio_buf),
+                BUF_SAMPLES
+            );
+      if (!bytesRead) {
+        audioStopRequested = true;
       }
-      
-      audioPause = false;
-    
+      audioTaskWait = false;
     }
     
     do {
@@ -466,7 +457,20 @@ static bool playFile(const char *path) {
           }
         }
       }
-      fast_forward = keyboard.getKey(VP_KEY_FASTFORWARD);
+      if(keyboard.keyChanged(VP_KEY_FASTFORWARD)) {
+        if (keyboard.getKey(VP_KEY_FASTFORWARD))
+        {
+          fast_forward = 1;
+          audioStopRequested = true;
+        }
+        else
+        {
+          fast_forward = 0;
+          audioPlaying = true;
+          audFile.seek(frames*BUF_SAMPLES);
+        }
+      }
+
       if (paused) {
         vTaskDelay(static_cast<TickType_t>(20 / portTICK_PERIOD_MS));
       } 
