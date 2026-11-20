@@ -87,7 +87,7 @@ void filePicker(LGFX& tft, char* out, size_t outSize)
 {
     String currentDir = "/";
     int selected = 0;
-
+    keyboard.resetKeyStateChangedAll();
     while (true) {
         std::vector<String> names;
         std::vector<bool> isDir;
@@ -158,13 +158,12 @@ void filePicker(LGFX& tft, char* out, size_t outSize)
 
 
         Marquee pickerMarquee;
-        auto LdrawPicker = [&]() {
+        auto lDrawPicker = [&]() {
             if (selected < 0) selected = static_cast<int>(names.size()) - 1;
             if (selected >= static_cast<int>(names.size())) selected = 0;
             drawPicker(tft, currentDir, names, isDir, selected, pickerMarquee);
         };
-        LdrawPicker();
-        keyboard.waitAllKeysReleased();
+        lDrawPicker();
         bool done = false;
     
         while (!done) {
@@ -176,7 +175,7 @@ void filePicker(LGFX& tft, char* out, size_t outSize)
                 continue;
             }
             else {
-                if (keyboard.getKey(KEY_ENTER)) {
+                if (keyboard.keyPressed(VP_KEY_ENTER)) {
                     if (isDir[selected]) {
                         if (names[selected] == "..") {
                             const int slash = currentDir.lastIndexOf('/');
@@ -199,23 +198,21 @@ void filePicker(LGFX& tft, char* out, size_t outSize)
                     continue;
                 }
 
-                if (keyboard.getKey(KEY_BACKSPACE)) {
+                if (keyboard.keyPressed(VP_KEY_BACK)) {
                     // Leave the picker and let the caller re-enter it.
                     strncpy(out, "", outSize);
                     return;
                 }
 
-                if (keyboard.getKey(';')) {
+                if (keyboard.keyPressed(VP_KEY_FM_UP)) {
                     selected--;
                     //delay(kDelayKeyRepeatUs / 1000);
-                    LdrawPicker();
-                    keyboard.waitAllKeysReleased();
+                    lDrawPicker();
                 }
-                if (keyboard.getKey('.')) {
+                if (keyboard.keyPressed(VP_KEY_FM_DOWN)) {
                     selected++;
                     //delay(kDelayKeyRepeatUs / 1000);
-                    LdrawPicker();
-                    keyboard.waitAllKeysReleased();
+                    lDrawPicker();
                 }
             }
             vTaskDelay(1);

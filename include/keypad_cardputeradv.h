@@ -110,75 +110,84 @@ const KeyValue_t CARDPUTER_KEYMAP[KEYPAD_COLS][KEYPAD_ROWS] = {
 
 
 
-class CardputerKeypad {
+class VideoPlayerKeypad {
     private:
         Adafruit_TCA8418 keypad;
-        std::unordered_map<char, bool> key_status = 
-            {{'`', 0},
-            {'1', 0},
-            {'2', 0},
-            {'3', 0},
-            {'4', 0},
-            {'5', 0},
-            {'6', 0},
-            {'7', 0},
-            {'8', 0},
-            {'9', 0},
-            {'0', 0},
-            {'-', 0},
-            {'=', 0},
-            {KEY_BACKSPACE, 0},
-            {KEY_TAB, 0},
-            {'q', 0},
-            {'w', 0},
-            {'e', 0},
-            {'r', 0},
-            {'t', 0},
-            {'y', 0},
-            {'u', 0},
-            {'i', 0},
-            {'o', 0},
-            {'p', 0},
-            {'[', 0},
-            {']', 0},
-            {'\\', 0},                  
-            {KEY_FN, 0},
-            {KEY_LEFT_SHIFT, 0},
-            {'a', 0},
-            {'s', 0},
-            {'d', 0},
-            {'f', 0},
-            {'g', 0},
-            {'h', 0},
-            {'j', 0},
-            {'k', 0},
-            {'l', 0},
-            {';', 0},
-            {'\'', 0},
-            {KEY_ENTER, 0},       
-            {KEY_LEFT_CTRL, 0},
-            {KEY_OPT, 0},
-            {KEY_LEFT_ALT, 0},
-            {'z', 0},
-            {'x', 0},
-            {'c', 0},
-            {'v', 0},
-            {'b', 0},
-            {'n', 0},
-            {'m', 0},
-            {',', 0},
-            {'.', 0},
-            {'/', 0},
-            {' ', 0}
+        typedef struct
+        {
+            bool state;
+            bool state_changed;
+        } keystate_t;
+        std::unordered_map<char, keystate_t> key_state = 
+            {{'`', {0, 0}},
+            {'1', {0, 0}},
+            {'2', {0, 0}},
+            {'3', {0, 0}},
+            {'4', {0, 0}},
+            {'5', {0, 0}},
+            {'6', {0, 0}},
+            {'7', {0, 0}},
+            {'8', {0, 0}},
+            {'9', {0, 0}},
+            {'0', {0, 0}},
+            {'-', {0, 0}},
+            {'=', {0, 0}},
+            {KEY_BACKSPACE, {0, 0}},
+            {KEY_TAB, {0, 0}},
+            {'q', {0, 0}},
+            {'w', {0, 0}},
+            {'e', {0, 0}},
+            {'r', {0, 0}},
+            {'t', {0, 0}},
+            {'y', {0, 0}},
+            {'u', {0, 0}},
+            {'i', {0, 0}},
+            {'o', {0, 0}},
+            {'p', {0, 0}},
+            {'[', {0, 0}},
+            {']', {0, 0}},
+            {'\\', {0, 0}},                  
+            {KEY_FN, {0, 0}},
+            {KEY_LEFT_SHIFT, {0, 0}},
+            {'a', {0, 0}},
+            {'s', {0, 0}},
+            {'d', {0, 0}},
+            {'f', {0, 0}},
+            {'g', {0, 0}},
+            {'h', {0, 0}},
+            {'j', {0, 0}},
+            {'k', {0, 0}},
+            {'l', {0, 0}},
+            {';', {0, 0}},
+            {'\'', {0, 0}},
+            {KEY_ENTER, {0, 0}},       
+            {KEY_LEFT_CTRL, {0, 0}},
+            {KEY_OPT, {0, 0}},
+            {KEY_LEFT_ALT, {0, 0}},
+            {'z', {0, 0}},
+            {'x', {0, 0}},
+            {'c', {0, 0}},
+            {'v', {0, 0}},
+            {'b', {0, 0}},
+            {'n', {0, 0}},
+            {'m', {0, 0}},
+            {',', {0, 0}},
+            {'.', {0, 0}},
+            {'/', {0, 0}},
+            {' ', {0, 0}}
         };
         static void IRAM_ATTR gpio_isr_handler(void* arg);
         volatile bool TCA8418_event;
     public:
-        CardputerKeypad();
-        ~CardputerKeypad();
+        VideoPlayerKeypad();
+        ~VideoPlayerKeypad();
         void updateKeyStatus();
         bool begin(TwoWire& wire);
         bool getKey(char key);
+        bool keyChanged(char key);
+        bool keyPressed(char key);
+        bool keyReleased(char key);
+        void resetKeyStateChangedAll();
         bool anyKey();
         void waitKeyReleased(char key);
         void waitAllKeysReleased();

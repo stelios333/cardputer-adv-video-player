@@ -15,6 +15,7 @@ ffmpeg -i input.mp4 -vn -ac 1 -ar 22050 -c:a pcm_u8 -f u8 input.pcm
 #include "message_box.h"
 #include "file_picker.h"
 #include "audio.h"
+#include "keypad_input.h"
 extern "C" {
 #include "esp_h264_dec.h"
 #include "esp_h264_dec_sw.h"
@@ -23,7 +24,7 @@ extern "C" {
 
 
 static LGFX tft;
-CardputerKeypad keyboard;
+VideoPlayerKeypad keyboard;
 
 // SD card
 #define SD_CS 12
@@ -34,7 +35,7 @@ CardputerKeypad keyboard;
 
 static SPIClass sdSPI(HSPI);
 // Video
-// Debug: 1 = ignore chroma and show only the Y plane (grayscale) to isolate colour problems
+// Debug: 1 = ignore chroma and show only the Y plane (grayscale)
 #define DEBUG_LUMA_ONLY 0
 // 1 = pixels are byte-swapped by us and pushed as swap565_t (LovyanGFX does zero-copy DMA, no conversion)
 // 0 = native RGB565 pushed as uint16_t (LovyanGFX converts into its own DMA buffer)
@@ -47,7 +48,7 @@ constexpr uint16_t VID_H_MB = (VID_H + 15) & ~15u;
 
 #define FRAME_US 33333  // 30 fps
 
-#define STRIP_H 16  // rows per DMA strip (must be even)
+#define STRIP_H 32  // rows per DMA strip (must be even)
 static uint16_t *strip[2];  // two small RGB565 DMA buffers
 static uint32_t stripCounter = 0;
 
@@ -338,7 +339,7 @@ static int decodeNal(uint8_t *nal, size_t len) {
   return result;
 }
 
-// ---------------------------------------------------------------- Playback
+// --- Playback ---
 static bool playFile(const char *path) {
   vidFile = SD.open(path, FILE_READ);
   if (!vidFile) {
@@ -374,16 +375,18 @@ static bool playFile(const char *path) {
   bool fast_forward = true;
   uint8_t *nal;
   size_t nalSize;
-  auto LadjustVol = [&](uint8_t new_vol) {
-      String vol_ind = String(static_cast<uint8_t>((static_cast<float>(new_vol))/255.0f*100)) + "%";
-      messageBoxDraw(tft, -15, "Volume", vol_ind.c_str(), 0xFFFF,
-                           0xFFFF, 2, 2, 4);
-      audio_vol = new_vol;
-      keyboard.waitKeyReleased(';');
-      keyboard.waitKeyReleased('.');
+  auto lAdjustVol = [&](uint8_t new_vol) {
+    String vol_ind = String(static_cast<uint8_t>((static_cast<float>(new_vol))/255.0f*100)) + "%";
+    messageBoxDraw(tft, -15, "Volume", vol_ind.c_str(), 0xFFFF,
+    0xFFFF, 2, 2, 4);
+    audio_vol = new_vol;
+    audio_dac.setMute(1);
+    delay(200);
+    audio_dac.setMute(0);
   };
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITESMOKE);
+  keyboard.resetKeyStateChangedAll();
   while (nextNal(nal, nalSize)) {
     int off = (nal[2] == 1) ? 3 : 4;
     uint8_t nalType = nal[off] & 0x1F;
@@ -392,15 +395,17 @@ static bool playFile(const char *path) {
       Serial.printf("SPS: profile_idc=%u level_idc=%u (level %u.%u)\n",
                     nal[off + 1], nal[off + 3], nal[off + 3] / 10, nal[off + 3] % 10);
     }
-
-    int r = decodeNal(nal, nalSize);
-    if (r < 0) {
-      Serial.printf("Decode error on NAL type %u - aborting file\n", nalType);
-      printHeap("at error");
-      ok = false;
-      break;
+    if (!fast_forward||!(frames%30)) {
+      int r = decodeNal(nal, nalSize);
+    
+      if (r < 0) {
+        Serial.printf("Decode error on NAL type %u - aborting file\n", nalType);
+        printHeap("at error");
+        ok = false;
+        break;
+      }
+      if (r == 0) continue;  // SPS/PPS/SEI etc. produce no picture
     }
-    if (r == 0) continue;  // SPS/PPS/SEI etc. produce no picture
     if (nalType != 1 && nalType != 5) continue;  // only show output of real slice NALs
 
     if (!fast_forward) {
@@ -419,7 +424,7 @@ static bool playFile(const char *path) {
       String timestamp = secondsToMinSec(static_cast<unsigned int>(frames*static_cast<float>(FRAME_US)/1000000.0f));
       tft.drawString(timestamp, 9, 9);
     }
-    if (!fast_forward||!(frames%10)) {
+    if (!fast_forward||!(frames%30)) {
       showFrame();
     }
     frames++;
@@ -446,23 +451,22 @@ static bool playFile(const char *path) {
     
     do {
       keyboard.updateKeyStatus();
-      if (keyboard.getKey('`')) {
+      if (keyboard.getKey(VP_KEY_ESC)) {
         goto exit_video;
-      } else if (keyboard.getKey('p')) {
-        audio_dac.setMute(1);
-        keyboard.waitAllKeysReleased();
+      } else if (keyboard.keyPressed(VP_KEY_PAUSE)) {
         paused = !paused;
-        if (!paused) {
-          audio_dac.setMute(0);
-        }
-      } else if (keyboard.getKey(KEY_FN)) {
-        if (keyboard.getKey('.')) {
-          LadjustVol(audio_vol-0xf);
-        } else if (keyboard.getKey(';')) {
-          LadjustVol(audio_vol+0xf);
+      } else if (keyboard.getKey(VP_KEY_MOD)) {
+        if (keyboard.getKey(VP_KEY_VOL_DN)) {
+          if (audio_vol > 0x00){
+            lAdjustVol(audio_vol-0xf);
+          }
+        } else if (keyboard.getKey(VP_KEY_VOL_UP)) {
+          if (audio_vol < 0xff){
+            lAdjustVol(audio_vol+0xf);
+          }
         }
       }
-      fast_forward = keyboard.getKey('f');
+      fast_forward = keyboard.getKey(VP_KEY_FASTFORWARD);
       if (paused) {
         vTaskDelay(static_cast<TickType_t>(20 / portTICK_PERIOD_MS));
       } 

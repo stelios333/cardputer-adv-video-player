@@ -1,6 +1,5 @@
 #pragma once
 #include "marquee.h"
-#include "keypad.h"
 #include <cstdint>
 
 constexpr int kMaxFiles       = 1024;
