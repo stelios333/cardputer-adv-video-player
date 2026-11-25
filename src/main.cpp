@@ -14,7 +14,7 @@ ffmpeg -i input.mp4 -vn -ac 1 -ar 22050 -c:a pcm_u8 -f u8 input.pcm
 #include "esp_heap_caps.h"
 #include "message_box.h"
 #include "file_picker.h"
-#include "audio.h"
+#include "pcm_playback.h"
 #include "keypad_input.h"
 extern "C" {
 #include "esp_h264_dec.h"
@@ -48,7 +48,7 @@ constexpr uint16_t VID_H_MB = (VID_H + 15) & ~15u;
 
 #define FRAME_US 33333  // 30 fps
 
-#define STRIP_H 32  // rows per DMA strip (must be even)
+#define STRIP_H 16  // rows per DMA strip (must be even)
 static uint16_t *strip[2];  // two small RGB565 DMA buffers
 static uint32_t stripCounter = 0;
 
@@ -69,56 +69,12 @@ static size_t nalPos = 0;   // bytes of the previously returned NAL (dropped on 
 static bool nalEof = false;
 static bool nalOverflow = false;
 static File vidFile;
-static File audFile;
 
-AudioDac audio_dac;
-constexpr uint32_t AUDIO_SAMPLE_RATE = 22050;
-constexpr size_t BUF_SAMPLES = (AUDIO_SAMPLE_RATE/1000000.0f)*FRAME_US + 0.5f; // 735 samples per frame
-volatile uint8_t raw_audio_buf[BUF_SAMPLES];
-volatile uint8_t audio_vol = 0x0;
-volatile bool audioPlaying = false;
-volatile bool audioTaskWait = false;
-volatile bool audioStopRequested = false;
+constexpr float AUDIO_VOL_STEP = 0.05f;
 
-TaskHandle_t audioTaskHandle = nullptr;
-static portMUX_TYPE _spinlock = portMUX_INITIALIZER_UNLOCKED;
+PcmPlayer pcm_player;
 
-void audioTask(void *parameter)
-{
-    static int16_t audio_buf[BUF_SAMPLES];
-    int16_t empty_buf[BUF_SAMPLES] {};
 
-    while (true)
-    {
-        // Wait until playback is requested
-        audio_dac.writeSamples((uint8_t*) empty_buf, BUF_SAMPLES * sizeof(int16_t));
-        if (!audioPlaying)
-        {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        audioStopRequested = false;
-        while (audioPlaying && !audioStopRequested)
-        {
-
-          taskENTER_CRITICAL(&_spinlock);
-          // Convert unsinged 8-bit PCM to singed 16-bit PCM
-            for (size_t i = 0; i < BUF_SAMPLES; i++) {
-                audio_buf[i] = ((int16_t)raw_audio_buf[i] - 128) * audio_vol; // -32768 .. +32512
-            }
-            taskEXIT_CRITICAL(&_spinlock);
-
-            audio_dac.writeSamples((uint8_t*) audio_buf, BUF_SAMPLES * sizeof(int16_t));
-            audioTaskWait = true;
-            while (audioTaskWait&&!audioStopRequested)
-            {
-              vTaskDelay(1);
-            }
-        }
-        audioPlaying = false;
-    }
-}
 
 String secondsToMinSec(unsigned int totalSeconds) {
 
@@ -350,12 +306,10 @@ static bool playFile(const char *path) {
   
   std::optional<String> audio_fname = audioTrackExists(path);
   if (audio_fname != std::nullopt) {
-    audFile = SD.open(audio_fname.value(), FILE_READ);
-    if (audFile) {
-      audioPlaying = true;
-    }
+    pcm_player.play(audio_fname.value().c_str());
+    pcm_player.setVolume(0.0f);
   }
-  audio_dac.setMute(!audioPlaying);
+  
   Serial.printf("Playing %s (%u bytes)\n", path, (unsigned)vidFile.size());
 
   nalReset();
@@ -376,14 +330,16 @@ static bool playFile(const char *path) {
   bool fast_forward = false;
   uint8_t *nal;
   size_t nalSize;
-  auto lAdjustVol = [&](uint8_t new_vol) {
-    String vol_ind = String(static_cast<uint8_t>((static_cast<float>(new_vol))/255.0f*100)) + "%";
+  auto lAdjustVol = [&](float new_vol) {
+    String vol_ind = String(static_cast<uint8_t>(new_vol*100.0f)) + "%";
     messageBoxDraw(tft, -15, "Volume", vol_ind.c_str(), 0xFFFF,
     0xFFFF, 2, 2, 4);
-    audio_vol = new_vol;
-    audio_dac.setMute(1);
+    pcm_player.setVolume(0.0f);
     delay(200);
-    audio_dac.setMute(0);
+    pcm_player.setVolume(new_vol);
+  };
+  auto lSyncAudio = [&]() {
+    pcm_player.seekMs((frames*FRAME_US)/1000);
   };
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITESMOKE);
@@ -402,6 +358,8 @@ static bool playFile(const char *path) {
       if (r < 0) {
         Serial.printf("Decode error on NAL type %u - aborting file\n", nalType);
         printHeap("at error");
+        messageBoxDraw(tft, -15, "Decode error", "Playback aborted.", 0xFFFF,
+        0xFFFF, 2, 2, 4);
         ok = false;
         break;
       }
@@ -429,15 +387,11 @@ static bool playFile(const char *path) {
       showFrame();
     }
     frames++;
-    if (audioPlaying && !fast_forward) {
-      size_t bytesRead = audFile.read(
-                const_cast<uint8_t*>(raw_audio_buf),
-                BUF_SAMPLES
-            );
-      if (!bytesRead) {
-        audioStopRequested = true;
+    if (frames%120==0) {
+      if (abs(static_cast<int>((frames*FRAME_US)/1000 - pcm_player.positionMs())) > 200){
+        Serial.println("Resync audio...");
+        lSyncAudio(); 
       }
-      audioTaskWait = false;
     }
     
     do {
@@ -448,12 +402,12 @@ static bool playFile(const char *path) {
         paused = !paused;
       } else if (keyboard.getKey(VP_KEY_MOD)) {
         if (keyboard.getKey(VP_KEY_VOL_DN)) {
-          if (audio_vol > 0x00){
-            lAdjustVol(audio_vol-0xf);
+          if (pcm_player.volume() > 0.0f){
+            lAdjustVol(pcm_player.volume()-AUDIO_VOL_STEP);
           }
         } else if (keyboard.getKey(VP_KEY_VOL_UP)) {
-          if (audio_vol < 0xff){
-            lAdjustVol(audio_vol+0xf);
+          if (pcm_player.volume() < 1.0f){
+            lAdjustVol(pcm_player.volume()+AUDIO_VOL_STEP);
           }
         }
       }
@@ -461,13 +415,13 @@ static bool playFile(const char *path) {
         if (keyboard.getKey(VP_KEY_FASTFORWARD))
         {
           fast_forward = 1;
-          audioStopRequested = true;
+          pcm_player.pause();
         }
         else
         {
           fast_forward = 0;
-          audioPlaying = true;
-          audFile.seek(frames*BUF_SAMPLES);
+          pcm_player.resume();
+          lSyncAudio();
         }
       }
 
@@ -484,8 +438,7 @@ static bool playFile(const char *path) {
   tft.endWrite();
   decoderClose();
   vidFile.close();  
-  audFile.close();
-  audioStopRequested = true;
+  pcm_player.stop();
   float secs = (micros() - t0) / 1e6f;
   Serial.printf("Done: %u frames, %.1f fps\n", (unsigned)frames, frames / secs);
   return ok;
@@ -533,8 +486,7 @@ void setup() {
   tft.setRotation(1);  // landscape 240x135 (use 3 if the image is upside down)
   tft.fillScreen(TFT_BLACK);
 
-  audio_dac.begin(&Wire, 191U, AUDIO_SAMPLE_RATE, false);
-  audio_dac.setMute(1);
+  pcm_player.begin(&Wire);
   for (int i = 0; i < 2; i++) {
     strip[i] = (uint16_t *)heap_caps_malloc(VID_W * STRIP_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (!strip[i]) { showError("Strip buffer alloc failed"); while (true) delay(1000); }
@@ -550,15 +502,8 @@ void setup() {
     while (true) delay(1000);
   }
 
-  xTaskCreatePinnedToCore(
-    audioTask,
-    "AudioTask",
-    4096,
-    NULL,
-    2,
-    &audioTaskHandle,
-    1
-  );
+
+
   printHeap("setup done");
 }
 
@@ -572,6 +517,9 @@ void loop() {
   tft.fillScreen(TFT_BLACK);
   messageBoxDraw(tft, -15, "Loading", "video file...", 0xFFFF,
                            0xFFFF, 2, 2, 4);
-  playFile(outPath);
+  if(!playFile(outPath)) {
+    keyboard.waitAllKeysReleased();
+    delay(1500);
+  };
 }
 

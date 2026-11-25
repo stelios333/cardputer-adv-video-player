@@ -47,9 +47,9 @@ AudioDac::~AudioDac() {
 
  
 }
-void AudioDac::begin(TwoWire* wire, uint8_t vol, uint32_t sample_rate, bool stereo_mode, bool is_16bit) {
+bool AudioDac::begin(TwoWire* wire, uint8_t vol, uint32_t sample_rate, bool stereo_mode, bool is_16bit) {
     if (_began) {
-        return;
+        return 1;
     }
 
     _volume = vol;
@@ -64,6 +64,7 @@ void AudioDac::begin(TwoWire* wire, uint8_t vol, uint32_t sample_rate, bool ster
 
     _began = true;
     ESP_LOGI(TAG, "AudioDac initialized");
+    return ESP_OK;
 }
 
 void AudioDac::setAmpVolume(uint8_t vol) {
@@ -111,10 +112,10 @@ void AudioDac::es8311Init() {
 
     es8311WriteReg(ES8311_DAC_REG37, 0x08);  // bypass DAC equalizer
 
-    setMute(true);
+    setAmpMute(true);
 }
 
-void AudioDac::setMute(bool mute) {
+void AudioDac::setAmpMute(bool mute) {
     if (!_began) return;
     uint8_t val = 0;
     es8311ReadReg(ES8311_DAC_REG31, &val);
@@ -158,9 +159,16 @@ void AudioDac::i2sInit() {
     ESP_ERROR_CHECK(i2s_channel_enable(_txHandle));
 }
 
-void AudioDac::writeSamples(void* buf, size_t len)
+bool AudioDac::chanDisable() {
+    return i2s_channel_disable(_txHandle) == ESP_OK;
+}
+
+bool AudioDac::chanEnable() {
+    return i2s_channel_enable(_txHandle) == ESP_OK;
+}
+
+void AudioDac::writeSamples(void* buf, size_t len, size_t *bytes_written, uint32_t timeout_ms)
 {
-    size_t bytesWritten = 0;
-    i2s_channel_write(_txHandle, buf, len, &bytesWritten,
-                           portMAX_DELAY);
+    i2s_channel_write(_txHandle, buf, len, bytes_written,
+                           timeout_ms);
 }

@@ -19,11 +19,14 @@ public:
 
     // Sets up I2C, configures the ES8311 registers, and sets up the I2S
     // peripheral + audio task. Call once before play().
-    void begin(TwoWire* wire, uint8_t vol=0xBF, uint32_t sample_rate = 44100, bool is_stereo = true, bool is_16bit = true);
+    bool begin(TwoWire* wire, uint8_t vol=0xBF, uint32_t sample_rate = 44100, bool is_stereo = true, bool is_16bit = true);
 
     void setAmpVolume(uint8_t vol);
-    void setMute(bool mute);
-    void writeSamples(void* buf, size_t len);
+    void setAmpMute(bool mute);
+    void writeSamples(void* buf, size_t len, size_t *bytes_written, uint32_t timeout_ms=100);
+    bool chanDisable();
+
+    bool chanEnable();
 
 private:
     // ---- Pin config ----
@@ -33,7 +36,6 @@ private:
 
     uint8_t _volume;
     bool _began = false;
-
     // --- I2C config ---
     static constexpr uint8_t ES8311_ADDR = 0x18; // 7-bit address (CE pin low)
     TwoWire* _Wire = nullptr; 
@@ -53,5 +55,6 @@ private:
  
     // ---- I2S setup ----
     void i2sInit();
+
     
 };
