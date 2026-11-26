@@ -7,10 +7,8 @@
 
 static const char* TAG = "ToneGenerator";
 
-// ---------------------------------------------------------------------------
 // ES8311 register addresses (subset needed for basic DAC playback).
 // See the ES8311 datasheet for the full register map.
-// ---------------------------------------------------------------------------
 #define ES8311_RESET_REG00 0x00
 #define ES8311_CLK_MANAGER_REG01 0x01
 #define ES8311_CLK_MANAGER_REG02 0x02
@@ -127,9 +125,6 @@ void AudioDac::setAmpMute(bool mute) {
     es8311WriteReg(ES8311_DAC_REG31, val);
 }
 
-// ---------------------------------------------------------------------------
-// I2S setup (ESP-IDF i2s_std driver, 3-wire master: BCLK/LRCK/DOUT)
-// ---------------------------------------------------------------------------
 void AudioDac::i2sInit() {
     i2s_chan_config_t chanCfg =
         I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
@@ -167,8 +162,13 @@ bool AudioDac::chanEnable() {
     return i2s_channel_enable(_txHandle) == ESP_OK;
 }
 
-void AudioDac::writeSamples(void* buf, size_t len, size_t *bytes_written, uint32_t timeout_ms)
+void AudioDac::writeSamples(const void* buf, size_t len, size_t *bytes_written, uint32_t timeout_ms)
 {
     i2s_channel_write(_txHandle, buf, len, bytes_written,
                            timeout_ms);
+}
+
+void AudioDac::preloadSamples(const void *buf, size_t len, size_t *bytes_loaded)
+{
+    i2s_channel_preload_data(_txHandle, buf, len, bytes_loaded);
 }

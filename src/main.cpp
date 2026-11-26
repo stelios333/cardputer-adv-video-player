@@ -16,6 +16,7 @@ ffmpeg -i input.mp4 -vn -ac 1 -ar 22050 -c:a pcm_u8 -f u8 input.pcm
 #include "file_picker.h"
 #include "pcm_playback.h"
 #include "keypad_input.h"
+#include "color_conv.h"
 extern "C" {
 #include "esp_h264_dec.h"
 #include "esp_h264_dec_sw.h"
@@ -37,9 +38,6 @@ static SPIClass sdSPI(HSPI);
 // Video
 // Debug: 1 = ignore chroma and show only the Y plane (grayscale)
 #define DEBUG_LUMA_ONLY 0
-// 1 = pixels are byte-swapped by us and pushed as swap565_t (LovyanGFX does zero-copy DMA, no conversion)
-// 0 = native RGB565 pushed as uint16_t (LovyanGFX converts into its own DMA buffer)
-#define USE_SWAP565_PUSH 1
 
 constexpr uint16_t VID_W = 240;
 constexpr uint16_t VID_W_MB = (VID_W + 15) & ~15u;
@@ -70,10 +68,10 @@ static bool nalEof = false;
 static bool nalOverflow = false;
 static File vidFile;
 
-constexpr float AUDIO_VOL_STEP = 0.05f;
 
 PcmPlayer pcm_player;
-
+#define DEFAULT_VOL 0.0f
+#define AUDIO_VOL_STEP 0.05f
 
 
 String secondsToMinSec(unsigned int totalSeconds) {
@@ -158,20 +156,7 @@ static bool nextNal(uint8_t *&p, size_t &n) {
   }
 }
 
-// --- Color conversion ---
-static inline uint8_t clamp8(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
-static inline uint16_t toRGB565(int y, int rOff, int gOff, int bOff) {
-  int c = (y - 16) * 298 + 128;
-  uint8_t r = clamp8((c + rOff) >> 8);
-  uint8_t g = clamp8((c + gOff) >> 8);
-  uint8_t b = clamp8((c + bOff) >> 8);
-  uint16_t px = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-#if USE_SWAP565_PUSH
-  px = __builtin_bswap16(px);
-#endif
-  return px;
-}
 
 // Converts rows [rowStart, rowStart+nRows) of an I420 picture to RGB565 (BT.601 limited range).
 // dst holds nRows * VID_W pixels.
@@ -194,15 +179,15 @@ static void i420ToRgb565(const uint8_t *yP, const uint8_t *uP, const uint8_t *vP
       int cu = u[x >> 1] - 128;
       int cv = v[x >> 1] - 128;
 #endif
-      int rOff = 516 * cu;
+      int rOff = 409 * cv;
       int gOff = -100 * cu - 208 * cv;
-      int bOff = 409 * cv;
+      int bOff = 516 * cu;
 
-      d0[x]     = toRGB565(y0[x],     rOff, gOff, bOff);
-      d0[x + 1] = toRGB565(y0[x + 1], rOff, gOff, bOff);
+      d0[x]     = YCbCrToRGB565(y0[x],     rOff, gOff, bOff);
+      d0[x + 1] = YCbCrToRGB565(y0[x + 1], rOff, gOff, bOff);
       if (hasRow1) {
-        d1[x]     = toRGB565(y1[x],     rOff, gOff, bOff);
-        d1[x + 1] = toRGB565(y1[x + 1], rOff, gOff, bOff);
+        d1[x]     = YCbCrToRGB565(y1[x],     rOff, gOff, bOff);
+        d1[x + 1] = YCbCrToRGB565(y1[x + 1], rOff, gOff, bOff);
       }
     }
   }
@@ -215,11 +200,7 @@ static void showFrame() {
     uint16_t *buf = strip[stripCounter++ & 1];
     i420ToRgb565(gY, gU, gV, VID_W, VID_W / 2, row, n, buf);
     tft.waitDMA();  // previous strip finished (and buffer we just wrote is no longer in use)
-#if USE_SWAP565_PUSH
-    tft.pushImageDMA(0, row, VID_W, n, (const lgfx::swap565_t *)buf);
-#else
     tft.pushImageDMA(0, row, VID_W, n, buf);
-#endif
   }
 }
 
@@ -307,7 +288,6 @@ static bool playFile(const char *path) {
   std::optional<String> audio_fname = audioTrackExists(path);
   if (audio_fname != std::nullopt) {
     pcm_player.play(audio_fname.value().c_str());
-    pcm_player.setVolume(0.0f);
   }
   
   Serial.printf("Playing %s (%u bytes)\n", path, (unsigned)vidFile.size());
@@ -320,7 +300,7 @@ static bool playFile(const char *path) {
     return false;
   }
   printHeap("after decoder open");
-
+  // Significantly reduces performance so we leave it off during playback and use __builtin_bswap16 instead.
   tft.startWrite();
   uint32_t frames = 0;
   int64_t nextDeadline = micros();
@@ -332,8 +312,8 @@ static bool playFile(const char *path) {
   size_t nalSize;
   auto lAdjustVol = [&](float new_vol) {
     String vol_ind = String(static_cast<uint8_t>(new_vol*100.0f)) + "%";
-    messageBoxDraw(tft, -15, "Volume", vol_ind.c_str(), 0xFFFF,
-    0xFFFF, 2, 2, 4);
+    messageBoxDraw(tft, -15, "Volume", vol_ind.c_str(), TFT_WHITE,
+    TFT_WHITE, 2, 2, 4);
     pcm_player.setVolume(0.0f);
     delay(200);
     pcm_player.setVolume(new_vol);
@@ -358,8 +338,8 @@ static bool playFile(const char *path) {
       if (r < 0) {
         Serial.printf("Decode error on NAL type %u - aborting file\n", nalType);
         printHeap("at error");
-        messageBoxDraw(tft, -15, "Decode error", "Playback aborted.", 0xFFFF,
-        0xFFFF, 2, 2, 4);
+        messageBoxDraw(tft, -15, "Decode error", "Playback aborted.", TFT_WHITE,
+        TFT_WHITE, 2, 2, 4);
         ok = false;
         break;
       }
@@ -383,11 +363,11 @@ static bool playFile(const char *path) {
       String timestamp = secondsToMinSec(static_cast<unsigned int>(frames*static_cast<float>(FRAME_US)/1000000.0f));
       tft.drawString(timestamp, 9, 9);
     }
+    frames++;
     if (!fast_forward||!(frames%30)) {
       showFrame();
     }
-    frames++;
-    if (frames%120==0) {
+    if (!fast_forward&&!(frames%120)) {
       if (abs(static_cast<int>((frames*FRAME_US)/1000 - pcm_player.positionMs())) > 200){
         Serial.println("Resync audio...");
         lSyncAudio(); 
@@ -400,6 +380,7 @@ static bool playFile(const char *path) {
         goto exit_video;
       } else if (keyboard.keyPressed(VP_KEY_PAUSE)) {
         paused = !paused;
+        paused ? pcm_player.pause() : pcm_player.resume();
       } else if (keyboard.getKey(VP_KEY_MOD)) {
         if (keyboard.getKey(VP_KEY_VOL_DN)) {
           if (pcm_player.volume() > 0.0f){
@@ -456,7 +437,7 @@ static void showError(const char *msg) {
 // Pushes red / green / blue bars through the exact same DMA path the video uses.
 // Expected, top to bottom: RED, GREEN, BLUE.
 static void displaySelfTest() {
-  const uint16_t cols[3] = {0xF800, 0x07E0, 0x001F};
+  const uint16_t cols[3] = {__builtin_bswap16(0xF800), __builtin_bswap16(0x07E0), __builtin_bswap16(0x001F)};
   tft.startWrite();
   for (int i = 0; i < 3; i++) {
     tft.waitDMA();
@@ -481,12 +462,13 @@ void setup() {
     Serial.println("Failed to initialize keypad!");
     while (0) {};
   }
-
+  
   tft.init();
   tft.setRotation(1);  // landscape 240x135 (use 3 if the image is upside down)
   tft.fillScreen(TFT_BLACK);
-
   pcm_player.begin(&Wire);
+  pcm_player.setVolume(DEFAULT_VOL);
+
   for (int i = 0; i < 2; i++) {
     strip[i] = (uint16_t *)heap_caps_malloc(VID_W * STRIP_H * 2, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (!strip[i]) { showError("Strip buffer alloc failed"); while (true) delay(1000); }
@@ -515,11 +497,15 @@ void loop() {
     filePicker(tft, outPath, kMaxPath);
   }
   tft.fillScreen(TFT_BLACK);
-  messageBoxDraw(tft, -15, "Loading", "video file...", 0xFFFF,
-                           0xFFFF, 2, 2, 4);
+  messageBoxDraw(tft, -15, "Loading", "video file...", TFT_WHITE,
+                           TFT_WHITE, 2, 2, 4);
   if(!playFile(outPath)) {
     keyboard.waitAllKeysReleased();
-    delay(1500);
+    while (!keyboard.anyKey()) 
+    {
+      keyboard.updateKeyStatus();
+      vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
   };
 }
 

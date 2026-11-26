@@ -14,7 +14,7 @@
  *  - Thread-safe control from loop(): play / pause / resume / stop / seek / volume
  *      * commands go through a FreeRTOS queue (never blocks the caller)
  *      * volume + status are lock-free atomics
- *  - DMA buffers are pre-filled (i2s_channel_preload_data) before the channel is
+ *  - DMA buffers are pre-filled (_dac.preloadSamples) before the channel is
  *    enabled, on every start and every seek, so there is no stale audio / glitch
  *
  * Make a compatible file with:
@@ -41,7 +41,7 @@ static constexpr uint32_t OUT_FRAME_BYTES  = AUDIO_CHANNELS * 2;              //
 // DMA: 4 descriptors * 256 frames = 1024 frames (~23 ms @ 44.1k).
 // Small DMA = fast response to volume/pause/seek. Raise if SD reads stutter.
 static constexpr uint32_t DMA_DESC_NUM   = 4;
-static constexpr uint32_t DMA_FRAME_NUM  = 384;
+static constexpr uint32_t DMA_FRAME_NUM  = 256;
 static constexpr uint32_t DMA_BYTES      = DMA_DESC_NUM * DMA_FRAME_NUM * OUT_FRAME_BYTES; // output bytes
 
 static constexpr size_t   OUT_CHUNK_BYTES  = DMA_FRAME_NUM * OUT_FRAME_BYTES;  // one chunk, I2S side
@@ -58,7 +58,7 @@ public:
     if (!_queue) return false;
     if (!initI2S()) return false;
     setVolume(0.5f);
-    return xTaskCreatePinnedToCore(taskTrampoline, "pcm_player", 6144, this,
+    return xTaskCreatePinnedToCore(taskTrampoline, "pcm_player", 4096, this,
                                    5, nullptr, 0) == pdPASS;   // core 0, loop() is on core 1
   }
 
@@ -92,7 +92,6 @@ private:
   AudioDac _dac;
   TwoWire*             _wire;
   QueueHandle_t        _queue = nullptr;
-  i2s_chan_handle_t    _tx    = nullptr;
   File                 _file;
   bool                 _chanEnabled = false;
 
@@ -166,7 +165,7 @@ private:
       size_t n = readChunk();
       if (n == 0) break;                              // very short file / EOF
       size_t loaded = 0;
-      i2s_channel_preload_data(_tx, _buf, n, &loaded);
+      _dac.preloadSamples(_buf, n, &loaded);
       if (loaded < n) { _bufLen = n; _bufOff = loaded; break; }   // DMA full, keep rest
     }
     if (_dac.chanEnable() == 0) _chanEnabled = true;

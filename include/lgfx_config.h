@@ -1,6 +1,8 @@
 #pragma once
 #include <LovyanGFX.h>
-// ---------------------------------------------------------------- Display
+
+#define SWAP565
+
 class LGFX : public lgfx::LGFX_Device
 {
 private:
@@ -49,7 +51,7 @@ public:
       cfg.dummy_read_bits = 1;
       cfg.readable = false;
       cfg.invert = true;
-      cfg.rgb_order = true;
+      cfg.rgb_order = false;
       cfg.dlen_16bit = false;
       cfg.bus_shared = false;
 

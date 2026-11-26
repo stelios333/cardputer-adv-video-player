@@ -23,7 +23,8 @@ public:
 
     void setAmpVolume(uint8_t vol);
     void setAmpMute(bool mute);
-    void writeSamples(void* buf, size_t len, size_t *bytes_written, uint32_t timeout_ms=100);
+    void writeSamples(const void* buf, size_t len, size_t *bytes_written, uint32_t timeout_ms=100);
+    void preloadSamples(const void* buf, size_t len, size_t *bytes_loaded);
     bool chanDisable();
 
     bool chanEnable();
