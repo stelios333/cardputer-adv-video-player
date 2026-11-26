@@ -449,7 +449,7 @@ static void displaySelfTest() {
   }
   tft.waitDMA();
   tft.endWrite();
-  messageBoxDraw(tft, -15, "Running display test", "please wait...", TFT_WHITE, TFT_WHITE,2,2,4);
+  messageBoxDraw(tft, -15, "Cardputer ADV", "H.264 Video Player", TFT_WHITE, TFT_WHITE,2,2,4);
   delay(2000);
 }
 
